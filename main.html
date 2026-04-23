@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Đăng ký LiDAR Hầm - Quy trình & Đánh giá</title>
+    
+    <!-- CSS Framework: Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- JavaScript Library: Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Required Constraints Comments -->
+    <!-- Chosen Palette: Slate (Chuyên nghiệp/Kỹ thuật), Emerald (Thành công/PASS), Rose (Thất bại/FAIL), Amber (Cảnh báo/Ngưỡng) -->
+    <!-- Application Structure Plan: 
+         Ứng dụng được thiết kế theo dạng "Interactive Guide & Dashboard".
+         1. Giới thiệu & Bối cảnh: Nêu bật vấn đề LiDAR kép trong hầm.
+         2. Trực quan hóa Pipeline 4 bước: Giải thích trực quan quy trình từ Nhập liệu -> Cô lập -> ICP -> Đánh giá. Kèm theo biểu đồ Histogram tương tác để minh họa bước Cô lập gương hầm.
+         3. Mô phỏng Đánh giá (Simulator): Phần tương tác cốt lõi. Người dùng kéo thanh trượt mô phỏng sai số (RMSE) và mức độ chồng lấn (Fitness), hệ thống sẽ tính toán và hiển thị kết luận (Tuyệt hảo, Đạt, FAIL) dựa trên quy tắc trong báo cáo.
+         4. So sánh Thuật toán (ICP vs Horn): Bảng so sánh nhanh giúp kỹ sư ra quyết định.
+         Lý do: Cấu trúc này chuyển đổi một tài liệu kỹ thuật khô khan thành một công cụ đào tạo và tham chiếu trực quan, cho phép người dùng "thử nghiệm" các ngưỡng sai số. 
+    -->
+    <!-- Visualization & Content Choices: 
+         - Biểu đồ Histogram (Chart.js): Minh họa quá trình tìm "đỉnh mật độ" (Peak Detection) theo trục dọc để cô lập gương hầm (Bước 2). Tương tác: Hover xem chi tiết mật độ. Thay thế cho ảnh tĩnh.
+         - Biểu đồ Doughnut (Chart.js): Hiển thị trực quan Fitness Score (Tỉ lệ Inliers) trong module Mô phỏng đánh giá. Đổi màu linh hoạt (Đỏ/Xanh) dựa trên ngưỡng 50%.
+         - Thanh trượt mô phỏng (Sliders): Tương tác trực tiếp với logic "Verdict" (Tuyệt hảo/PASS/FAIL), giúp người dùng hiểu rõ ranh giới của các con số 2.5cm, 4.5cm, 5.0cm.
+         - Unicode Icons: Dùng thay thế hoàn toàn SVG để giữ thiết kế sạch, nhẹ và tuân thủ ràng buộc.
+    -->
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+
+    <style>
+        /* Custom Styles for Chart Containers as per requirements */
+        .chart-container {
+            position: relative;
+            width: 100%;
+            max-width: 800px; /* Constrain max width for readability */
+            margin-left: auto;
+            margin-right: auto;
+            height: 300px;
+            max-height: 400px;
+        }
+        @media (min-width: 768px) {
+            .chart-container {
+                height: 400px;
+            }
+        }
+        
+        /* Smooth transitions for interactive elements */
+        .transition-all-ease {
+            transition: all 0.3s ease-in-out;
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans antialiased selection:bg-indigo-100 selection:text-indigo-900">
+
+    <!-- Header -->
+    <header class="bg-slate-900 text-white py-8 shadow-md">
+        <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+            <h1 class="text-3xl md:text-4xl font-bold tracking-tight mb-2">⚡ LiDAR Tunnel Registration</h1>
+            <p class="text-slate-300 text-lg">Hệ thống xử lý & Đánh giá sai lệch đám mây điểm hầm kép</p>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-12">
+
+        <!-- Intro Section -->
+        <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 md:p-8">
+            <div class="flex flex-col md:flex-row gap-8 items-center">
+                <div class="flex-1 space-y-4">
+                    <h2 class="text-2xl font-bold text-slate-900">🌐 Bối cảnh Kỹ thuật</h2>
+                    <p class="text-slate-600 leading-relaxed">
+                        Trong thi công hầm, dữ liệu thường được thu thập đồng thời từ <strong>hai máy LiDAR</strong> đặt sát hai bên vách hầm (cách nhau ~15m) để quét toàn bộ gương hầm. Sự khác biệt về góc nhìn (perspective) và tọa độ địa lý cực lớn (Global Shift) thường gây ra sai số nghiêm trọng ở các vùng biên khi thực hiện khớp nối (Registration).
+                    </p>
+                    <div class="flex flex-wrap gap-3 mt-4">
+                        <span class="px-3 py-1 bg-indigo-50 text-indigo-700 rounded-full text-sm font-medium">❖ Dual LiDAR</span>
+                        <span class="px-3 py-1 bg-rose-50 text-rose-700 rounded-full text-sm font-medium">❖ Outliers & Noise</span>
+                        <span class="px-3 py-1 bg-amber-50 text-amber-700 rounded-full text-sm font-medium">❖ Global Shift Issues</span>
+                    </div>
+                </div>
+                <div class="w-full md:w-1/3 bg-slate-100 rounded-lg p-6 text-center border border-slate-200">
+                    <div class="text-5xl mb-3">🕳️</div>
+                    <h3 class="font-semibold text-slate-800">Mục tiêu Pipeline</h3>
+                    <p class="text-sm text-slate-500 mt-2">Tự động hóa căn chỉnh, loại bỏ nhiễu và đánh giá độ khít bề mặt dưới mức 10mm.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Automated Pipeline Section -->
+        <section>
+            <h2 class="text-2xl font-bold text-slate-900 mb-6">⚙️ Pipeline Tự động hóa (4 Bước)</h2>
+            <p class="text-slate-600 mb-6">Quy trình xử lý tuần tự đảm bảo loại bỏ rác ở vách hầm, chỉ tập trung khớp phần gương hầm cốt lõi.</p>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <!-- Step 1 -->
+                <div class="bg-white p-5 rounded-xl border-l-4 border-l-blue-500 shadow-sm hover:shadow-md transition-all-ease">
+                    <div class="text-2xl mb-2">1️⃣</div>
+                    <h3 class="font-bold text-lg mb-2">Tiền xử lý & Nạp liệu</h3>
+                    <p class="text-sm text-slate-600">Nạp file CSV/BIN. Bắt buộc xử lý <strong>Global Shift</strong> để kéo tọa độ hàng chục triệu về mức cục bộ, tránh lỗi sai số dấu phẩy động.</p>
+                </div>
+                <!-- Step 2 -->
+                <div class="bg-white p-5 rounded-xl border-l-4 border-l-indigo-500 shadow-sm hover:shadow-md transition-all-ease">
+                    <div class="text-2xl mb-2">2️⃣</div>
+                    <h3 class="font-bold text-lg mb-2">Cô lập Gương hầm</h3>
+                    <p class="text-sm text-slate-600">Sử dụng phân tích Histogram (đỉnh mật độ) dọc trục Y để tìm mặt hầm. Cắt bỏ 20% vách và 30% nền để loại bỏ nhiễu.</p>
+                </div>
+                <!-- Step 3 -->
+                <div class="bg-white p-5 rounded-xl border-l-4 border-l-amber-500 shadow-sm hover:shadow-md transition-all-ease">
+                    <div class="text-2xl mb-2">3️⃣</div>
+                    <h3 class="font-bold text-lg mb-2">Khớp nối ICP</h3>
+                    <p class="text-sm text-slate-600">Thực thi Iterative Closest Point. Yêu cầu thiết lập <strong>Final Overlap ~ 80%</strong> để bỏ qua các vùng khuất của mỗi máy.</p>
+                </div>
+                <!-- Step 4 -->
+                <div class="bg-white p-5 rounded-xl border-l-4 border-l-emerald-500 shadow-sm hover:shadow-md transition-all-ease">
+                    <div class="text-2xl mb-2">4️⃣</div>
+                    <h3 class="font-bold text-lg mb-2">Đánh giá (Evaluation)</h3>
+                    <p class="text-sm text-slate-600">Tính Trimmed RMSE (chỉ lấy điểm lệch < 10cm) và Fitness Score để xuất ra kết luận tự động: Tuyệt hảo, PASS hoặc FAIL.</p>
+                </div>
+            </div>
+
+            <!-- Interactive Histogram Visualization for Step 2 -->
+            <div class="mt-8 bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                <h3 class="font-bold text-lg mb-2 text-slate-800">🔍 Minh họa Bước 2: Tự động phát hiện Gương hầm (Peak Detection)</h3>
+                <p class="text-sm text-slate-600 mb-6">Biểu đồ mô phỏng mật độ điểm dọc theo trục Y của hầm. Thuật toán sẽ tự động tìm "đỉnh" cao nhất (chính là bức tường gương hầm) và lấy vùng biên xung quanh nó để loại bỏ nhiễu dọc thân hầm.</p>
+                
+                <div class="chart-container">
+                    <canvas id="histogramChart"></canvas>
+                </div>
+                <div class="text-center mt-4 text-sm text-indigo-600 font-medium bg-indigo-50 py-2 rounded">
+                    ⇡ Thuật toán Segment tự động cắt vùng dữ liệu trong dải màu xanh để đưa vào ICP ⇡
+                </div>
+            </div>
+        </section>
+
+        <!-- Evaluation Simulator Section -->
+        <section class="bg-slate-900 text-white rounded-2xl shadow-lg p-6 md:p-8 relative overflow-hidden">
+            <!-- Decorative background element -->
+            <div class="absolute top-0 right-0 -mr-16 -mt-16 text-9xl opacity-5 select-none pointer-events-none">📊</div>
+
+            <div class="relative z-10">
+                <h2 class="text-3xl font-bold mb-2">🎯 Bộ mô phỏng Tiêu chuẩn Đánh giá</h2>
+                <p class="text-slate-400 mb-8">Điều chỉnh các thanh trượt bên dưới để xem cách hệ thống tự động đưa ra kết luận (Verdict) dựa trên sai số Trimmed RMSE và Tỉ lệ Inliers (Fitness Score).</p>
+
+                <div class="flex flex-col lg:flex-row gap-10">
+                    
+                    <!-- Controls -->
+                    <div class="w-full lg:w-1/2 space-y-8">
+                        <!-- RMSE Slider -->
+                        <div class="bg-slate-800 p-5 rounded-xl border border-slate-700">
+                            <div class="flex justify-between items-end mb-4">
+                                <div>
+                                    <label class="block text-sm font-semibold text-slate-300 mb-1">Trimmed RMSE (Sai số lõi)</label>
+                                    <p class="text-xs text-slate-500">Độ lệch trung bình của các điểm khít nhau (< 10cm)</p>
+                                </div>
+                                <div class="text-2xl font-bold text-white"><span id="rmseVal">3.2</span> <span class="text-sm text-slate-400">cm</span></div>
+                            </div>
+                            <input type="range" id="rmseSlider" min="0" max="8" step="0.1" value="3.2" class="w-full h-2 bg-slate-600 rounded-lg appearance-none cursor-pointer accent-indigo-500">
+                            <div class="flex justify-between text-xs text-slate-500 mt-2 font-mono">
+                                <span>0</span>
+                                <span>2.5 (Tuyệt hảo)</span>
+                                <span>4.5 (Ngưỡng PASS)</span>
+                                <span>8</span>
+                            </div>
+                        </div>
+
+                        <!-- Fitness Score Slider -->
+                        <div class="bg-slate-800 p-5 rounded-xl border border-slate-700">
+                            <div class="flex justify-between items-end mb-4">
+                                <div>
+                                    <label class="block text-sm font-semibold text-slate-300 mb-1">Fitness Score (Inliers)</label>
+                                    <p class="text-xs text-slate-500">Tỉ lệ diện tích vùng chồng lấn thành công</p>
+                                </div>
+                                <div class="text-2xl font-bold text-white"><span id="fitnessVal">68</span><span class="text-sm text-slate-400">%</span></div>
+                            </div>
+                            <input type="range" id="fitnessSlider" min="10" max="100" step="1" value="68" class="w-full h-2 bg-slate-600 rounded-lg appearance-none cursor-pointer accent-indigo-500">
+                            <div class="flex justify-between text-xs text-slate-500 mt-2 font-mono">
+                                <span>10%</span>
+                                <span>50% (Ngưỡng FAIL)</span>
+                                <span>100%</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Results & Visualization -->
+                    <div class="w-full lg:w-1/2 flex flex-col items-center justify-center bg-slate-800 rounded-xl p-6 border border-slate-700">
+                        <!-- Doughnut Chart for Fitness -->
+                        <div class="w-40 h-40 relative mb-6">
+                            <canvas id="fitnessChart"></canvas>
+                            <div class="absolute inset-0 flex items-center justify-center flex-col">
+                                <span id="chartCenterVal" class="text-2xl font-bold">68%</span>
+                                <span class="text-[10px] text-slate-400">Khớp nối</span>
+                            </div>
+                        </div>
+
+                        <!-- Verdict Box -->
+                        <div id="verdictBox" class="w-full text-center py-4 px-6 rounded-lg border-2 border-dashed border-emerald-500 bg-emerald-500/10 transition-all-ease">
+                            <div class="text-sm text-slate-300 mb-1 uppercase tracking-wider">Hệ thống Kết luận</div>
+                            <div id="verdictText" class="text-2xl font-bold text-emerald-400">ĐẠT (PASS)</div>
+                            <div id="verdictSubtext" class="text-xs text-emerald-300/70 mt-1">Phù hợp cho bề mặt đá thô hầm.</div>
+                        </div>
+                        
+                        <!-- Mini Explanation -->
+                        <div class="mt-4 text-xs text-slate-400 text-center px-4">
+                            Luật: Bất kỳ ma trận nào RMSE > 5cm hoặc Fitness < 50% đều bị loại ngay lập tức (FAIL).
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </section>
+
+        <!-- Algorithms Comparison -->
+        <section>
+            <h2 class="text-2xl font-bold text-slate-900 mb-6">⚖️ Lựa chọn Thuật toán Khớp nối</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- ICP -->
+                <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
+                    <div class="bg-slate-100 px-6 py-4 border-b border-slate-200">
+                        <h3 class="font-bold text-lg text-slate-800 flex items-center gap-2">🔄 Thuật toán ICP <span class="text-sm font-normal text-slate-500">(Iterative Closest Point)</span></h3>
+                    </div>
+                    <div class="p-6 flex-1">
+                        <ul class="space-y-3 text-sm text-slate-600 mb-6">
+                            <li class="flex gap-2"><span>▪️</span> <span><strong>Bản chất:</strong> Dò dẫm lặp đi lặp lại để tìm sự tương xứng bề mặt.</span></li>
+                            <li class="flex gap-2"><span>▪️</span> <span><strong>Yêu cầu:</strong> Dữ liệu đã gần nhau sẵn (đã gỡ Global Shift).</span></li>
+                            <li class="flex gap-2"><span>▪️</span> <span><strong>Rủi ro:</strong> Dễ bị trượt dọc trục hầm nếu hầm quá nhẵn (Local Minimum).</span></li>
+                            <li class="flex gap-2"><span>▪️</span> <span><strong>Tốc độ:</strong> Chậm, tốn tài nguyên tìm láng giềng gần nhất.</span></li>
+                        </ul>
+                    </div>
+                    <div class="bg-slate-50 p-4 border-t border-slate-200 text-sm">
+                        <span class="font-semibold text-slate-700">Dùng khi:</span> Không có điểm mốc/Prism, chỉ dựa vào địa hình lồi lõm của gương hầm.
+                    </div>
+                </div>
+
+                <!-- HORN -->
+                <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
+                    <div class="bg-indigo-50 px-6 py-4 border-b border-indigo-100">
+                        <h3 class="font-bold text-lg text-indigo-900 flex items-center gap-2">📐 Thuật toán Horn <span class="text-sm font-normal text-indigo-600">(Point-to-Point)</span></h3>
+                    </div>
+                    <div class="p-6 flex-1">
+                        <ul class="space-y-3 text-sm text-slate-600 mb-6">
+                            <li class="flex gap-2"><span>▪️</span> <span><strong>Bản chất:</strong> Đại số tuyến tính giải mã ma trận ngay tức thì.</span></li>
+                            <li class="flex gap-2"><span>▪️</span> <span><strong>Yêu cầu:</strong> Có ít nhất 3 cặp điểm khống chế (Gương Prism).</span></li>
+                            <li class="flex gap-2"><span>▪️</span> <span><strong>Rủi ro:</strong> Sai số tâm Prism ảnh hưởng trực tiếp đến toàn bộ khối.</span></li>
+                            <li class="flex gap-2"><span>▪️</span> <span><strong>Tốc độ:</strong> Cực kỳ nhanh (vài mili-giây). Khử luôn lỗi Global Shift.</span></li>
+                        </ul>
+                    </div>
+                    <div class="bg-indigo-50/50 p-4 border-t border-indigo-100 text-sm">
+                        <span class="font-semibold text-indigo-800">Dùng khi:</span> Đã thiết lập sẵn 2-3 lăng kính (Prism) trong vùng nhìn chung của cả 2 LiDAR.
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <footer class="bg-slate-100 border-t border-slate-200 mt-12 py-8 text-center text-slate-500 text-sm">
+        <p>Hệ thống hỗ trợ thư viện CCCoreLib (CloudCompare) C++</p>
+        <p class="mt-1">Dữ liệu nội bộ - Tunnel Registration Module</p>
+    </footer>
+
+    <!-- JavaScript Logic -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            
+            // --- 1. HISTOGRAM CHART MINH HỌA (Bước 2) ---
+            const ctxHist = document.getElementById('histogramChart').getContext('2d');
+            
+            // Tạo dữ liệu giả lập giống ảnh Histogram_RIGHT.png (Đỉnh mật độ ở giữa)
+            const labels = Array.from({length: 40}, (_, i) => i + 1);
+            const dataCounts = labels.map(i => {
+                // Tạo một đường cong Gaussian (Đỉnh) ở vị trí index 25
+                const dist = Math.abs(i - 25);
+                if (dist === 0) return 30000;
+                if (dist === 1) return 15000;
+                if (dist === 2) return 5000;
+                if (dist < 8) return 1000 + Math.random() * 500;
+                return Math.random() * 200; // Nhiễu nền
+            });
+
+            // Highlight màu cho vùng Segmented (Ví dụ bin 23 đến 27)
+            const bgColors = labels.map(i => (i >= 23 && i <= 27) ? 'rgba(99, 102, 241, 0.8)' : 'rgba(148, 163, 184, 0.4)');
+            const borderColors = labels.map(i => (i >= 23 && i <= 27) ? 'rgba(79, 70, 229, 1)' : 'rgba(148, 163, 184, 0.6)');
+
+            new Chart(ctxHist, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Số lượng điểm (Mật độ)',
+                        data: dataCounts,
+                        backgroundColor: bgColors,
+                        borderColor: borderColors,
+                        borderWidth: 1,
+                        borderRadius: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    if(context.dataIndex >= 22 && context.dataIndex <= 26) {
+                                        return context.formattedValue + ' pts (Vùng Gương Hầm)';
+                                    }
+                                    return context.formattedValue + ' pts (Nhiễu vách)';
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: { 
+                            beginAtZero: true, 
+                            title: { display: true, text: 'Số lượng Điểm (Points)' },
+                            grid: { color: '#f1f5f9' }
+                        },
+                        x: { 
+                            title: { display: true, text: 'Lát cắt theo Trục Y (Dọc Hầm)' },
+                            grid: { display: false }
+                        }
+                    }
+                }
+            });
+
+            // --- 2. ĐÁNH GIÁ MÔ PHỎNG (EVALUATION SIMULATOR) ---
+            const rmseSlider = document.getElementById('rmseSlider');
+            const fitnessSlider = document.getElementById('fitnessSlider');
+            const rmseValDisp = document.getElementById('rmseVal');
+            const fitnessValDisp = document.getElementById('fitnessVal');
+            const chartCenterVal = document.getElementById('chartCenterVal');
+            
+            const verdictBox = document.getElementById('verdictBox');
+            const verdictText = document.getElementById('verdictText');
+            const verdictSubtext = document.getElementById('verdictSubtext');
+
+            // Khởi tạo Chart Doughnut cho Fitness Score
+            const ctxFit = document.getElementById('fitnessChart').getContext('2d');
+            const fitnessChart = new Chart(ctxFit, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Khớp (Inliers)', 'Nhiễu (Outliers)'],
+                    datasets: [{
+                        data: [68, 32],
+                        backgroundColor: ['#10b981', '#334155'],
+                        borderWidth: 0,
+                        cutout: '75%'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { enabled: false }
+                    },
+                    animation: { animateScale: true }
+                }
+            });
+
+            // Hàm xử lý Logic Đánh giá dựa trên Báo cáo
+            function updateSimulator() {
+                const rmse = parseFloat(rmseSlider.value);
+                const fitness = parseInt(fitnessSlider.value);
+
+                // Cập nhật UI Texts
+                rmseValDisp.textContent = rmse.toFixed(1);
+                fitnessValDisp.textContent = fitness;
+                chartCenterVal.textContent = fitness + '%';
+
+                // Cập nhật Chart Doughnut
+                fitnessChart.data.datasets[0].data = [fitness, 100 - fitness];
+                
+                // Logic Verdict
+                let status = 'fail'; // default
+                let title = 'FAIL';
+                let sub = '';
+
+                if (fitness < 50 || rmse > 5.0) {
+                    status = 'fail';
+                    title = 'THẤT BẠI (FAIL)';
+                    if (fitness < 50) sub = 'Tỉ lệ Inliers quá thấp (<50%). Sai lệch hình học nghiêm trọng.';
+                    else sub = 'Sai số RMSE vượt ngưỡng cho phép (> 5.0cm).';
+                } else if (rmse < 2.5) {
+                    status = 'tuyethao';
+                    title = 'TUYỆT HẢO';
+                    sub = 'Mức độ khớp tiệm cận giới hạn vật lý của cảm biến.';
+                } else if (rmse <= 4.5) {
+                    status = 'pass';
+                    title = 'ĐẠT (PASS)';
+                    sub = 'Phù hợp tiêu chuẩn thi công bề mặt đá thô hầm.';
+                } else {
+                    // Xử lý khoảng hở 4.5 < RMSE <= 5.0 theo báo cáo là FAIL hoặc Kém
+                    status = 'fail';
+                    title = 'THẤT BẠI (FAIL)';
+                    sub = 'Vượt ngưỡng PASS an toàn (4.5cm).';
+                }
+
+                // Cập nhật Giao diện Box theo Status
+                verdictBox.className = "w-full text-center py-4 px-6 rounded-lg border-2 transition-all-ease ";
+                
+                if (status === 'tuyethao') {
+                    verdictBox.classList.add('border-dashed', 'border-cyan-400', 'bg-cyan-500/10');
+                    verdictText.className = "text-2xl font-bold text-cyan-400";
+                    verdictText.textContent = title;
+                    verdictSubtext.className = "text-xs text-cyan-300/70 mt-1";
+                    fitnessChart.data.datasets[0].backgroundColor[0] = '#22d3ee'; // Cyan
+                } 
+                else if (status === 'pass') {
+                    verdictBox.classList.add('border-dashed', 'border-emerald-500', 'bg-emerald-500/10');
+                    verdictText.className = "text-2xl font-bold text-emerald-400";
+                    verdictText.textContent = title;
+                    verdictSubtext.className = "text-xs text-emerald-300/70 mt-1";
+                    fitnessChart.data.datasets[0].backgroundColor[0] = '#10b981'; // Emerald
+                } 
+                else {
+                    verdictBox.classList.add('border-solid', 'border-rose-500', 'bg-rose-500/10');
+                    verdictText.className = "text-2xl font-bold text-rose-400";
+                    verdictText.textContent = title;
+                    verdictSubtext.className = "text-xs text-rose-300/80 mt-1";
+                    fitnessChart.data.datasets[0].backgroundColor[0] = '#f43f5e'; // Rose
+                }
+
+                verdictSubtext.textContent = sub;
+                fitnessChart.update();
+            }
+
+            // Gắn event listeners
+            rmseSlider.addEventListener('input', updateSimulator);
+            fitnessSlider.addEventListener('input', updateSimulator);
+            
+            // Chạy lần đầu
+            updateSimulator();
+        });
+    </script>
+</body>
+</html>
